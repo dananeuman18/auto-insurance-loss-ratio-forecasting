@@ -1,0 +1,755 @@
+
+# ============================================================
+# ADS 506 FINAL TEAM PROJECT
+# INSURANCE LOSS RATIO FORECASTING
+#
+# TEAM MEMBER 3: TSLM ANALYSIS
+# DATA: COMBINED INSURANCE DATASETS (1988-2007)
+# MODEL VARIABLE: IncurredLosses
+# TRAINING PERIOD: 1988-2003
+# TESTING PERIOD: 2004-2007
+# VISUALIZATION: DOLLARS IN MILLIONS
+# ============================================================
+
+
+# ============================================================
+# 1. LOAD REQUIRED PACKAGES
+# ============================================================
+
+required_packages <- c(
+  "tidyverse",
+  "fpp3",
+  "scales"
+)
+
+for (pkg in required_packages) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+}
+
+library(tidyverse)
+library(fpp3)
+library(scales)
+
+
+# ============================================================
+# 2. PROJECT WORKING DIRECTORY
+# ============================================================
+
+# Run from the repository root.
+# If necessary, change this path to your local project folder.
+
+project_dir <- "C:/Users/newer/OneDrive/Desktop/ADS 506/Final Assignment"
+
+setwd(project_dir)
+
+# Define output folders
+
+output_dir <- "outputs"
+plot_dir <- file.path(output_dir, "plots")
+
+dir.create(
+  output_dir,
+  showWarnings = FALSE,
+  recursive = TRUE
+)
+
+dir.create(
+  plot_dir,
+  showWarnings = FALSE,
+  recursive = TRUE
+)
+
+cat("\nPROJECT DIRECTORY:\n")
+print(getwd())
+
+
+# ============================================================
+# 3. IMPORT ORIGINAL DATASETS
+# ============================================================
+
+file1_path <- "ppauto_pos_Sep_2011.csv"
+file2_path <- "ppauto_pos98-07_Dec_2025.csv"
+
+if (!file.exists(file1_path)) {
+  stop("First dataset not found: ", file1_path)
+}
+
+if (!file.exists(file2_path)) {
+  stop("Second dataset not found: ", file2_path)
+}
+
+file1 <- readr::read_csv(
+  file1_path,
+  show_col_types = FALSE
+)
+
+file2 <- readr::read_csv(
+  file2_path,
+  show_col_types = FALSE
+)
+
+cat("\n========== DATASET 1 ==========\n")
+print(dim(file1))
+print(names(file1))
+
+cat("\n========== DATASET 2 ==========\n")
+print(dim(file2))
+print(names(file2))
+
+
+# ============================================================
+# 4. STANDARDIZE INCURRED LOSSES
+# ============================================================
+
+required_file1 <- c(
+  "GRCODE",
+  "GRNAME",
+  "AccidentYear",
+  "IncurLoss_B"
+)
+
+required_file2 <- c(
+  "GRCODE",
+  "GRNAME",
+  "AccidentYear",
+  "IncurredLosses"
+)
+
+if (!all(required_file1 %in% names(file1))) {
+  stop("Dataset 1 is missing required columns.")
+}
+
+if (!all(required_file2 %in% names(file2))) {
+  stop("Dataset 2 is missing required columns.")
+}
+
+file1_clean <- file1 %>%
+  transmute(
+    GRCODE,
+    GRNAME,
+    AccidentYear,
+    IncurredLosses = IncurLoss_B
+  )
+
+file2_clean <- file2 %>%
+  transmute(
+    GRCODE,
+    GRNAME,
+    AccidentYear,
+    IncurredLosses
+  )
+
+
+# ============================================================
+# 5. COMBINE DATASETS: 1988-2007
+# ============================================================
+
+combined_data <- bind_rows(
+  file1_clean,
+  file2_clean
+) %>%
+  filter(
+    AccidentYear >= 1988,
+    AccidentYear <= 2007
+  )
+
+cat("\n========== COMBINED DATASET ==========\n")
+
+print(dim(combined_data))
+
+cat(
+  "\nAccident years:",
+  min(combined_data$AccidentYear, na.rm = TRUE),
+  "to",
+  max(combined_data$AccidentYear, na.rm = TRUE),
+  "\n"
+)
+
+
+# ============================================================
+# 6. CHECK MISSING VALUES AND DUPLICATES
+# ============================================================
+
+cat("\n========== MISSING VALUES ==========\n")
+
+print(colSums(is.na(combined_data)))
+
+cat("\n========== DUPLICATE OBSERVATIONS ==========\n")
+
+print(sum(duplicated(combined_data)))
+
+
+# ============================================================
+# 7. AGGREGATE ANNUAL INDUSTRY INCURRED LOSSES
+# ============================================================
+
+annual_industry_losses <- combined_data %>%
+  group_by(AccidentYear) %>%
+  summarise(
+    IncurredLosses = sum(
+      IncurredLosses,
+      na.rm = TRUE
+    ),
+    .groups = "drop"
+  ) %>%
+  arrange(AccidentYear)
+
+cat("\n========== ANNUAL INDUSTRY LOSSES ==========\n")
+
+print(annual_industry_losses)
+
+write_csv(
+  annual_industry_losses,
+  file.path(output_dir, "annual_industry_losses.csv")
+)
+
+
+# ============================================================
+# 8. CONVERT DATA INTO A TSIBBLE
+# ============================================================
+
+ts_data <- annual_industry_losses %>%
+  as_tsibble(index = AccidentYear)
+
+cat("\n========== TIME SERIES DATA ==========\n")
+
+print(ts_data)
+
+cat(
+  "\nTotal annual observations:",
+  nrow(ts_data),
+  "\n"
+)
+
+# Confirm 20 annual observations
+
+if (nrow(ts_data) != 20) {
+  stop(
+    "Expected 20 annual observations for 1988-2007. ",
+    "Please check the combined datasets."
+  )
+}
+
+
+# ============================================================
+# 9. SPLIT DATA: TRAINING AND TESTING
+# ============================================================
+
+# Training: 1988-2003 (16 observations)
+# Testing: 2004-2007 (4 observations)
+
+train_data <- ts_data %>%
+  filter(AccidentYear <= 2003)
+
+test_data <- ts_data %>%
+  filter(AccidentYear >= 2004)
+
+cat("\n========== TRAINING DATA ==========\n")
+
+print(range(train_data$AccidentYear))
+print(nrow(train_data))
+
+cat("\n========== TESTING DATA ==========\n")
+
+print(range(test_data$AccidentYear))
+print(nrow(test_data))
+
+
+# ============================================================
+# 10. HISTORICAL INDUSTRY INCURRED LOSSES
+# ============================================================
+
+# Convert to millions for visualization only.
+# Original IncurredLosses remains unchanged.
+
+plot_data <- ts_data %>%
+  mutate(
+    IncurredLosses_Millions =
+      IncurredLosses / 1000000
+  )
+
+p1 <- ggplot(
+  plot_data,
+  aes(
+    x = AccidentYear,
+    y = IncurredLosses_Millions
+  )
+) +
+  geom_line(
+    color = "blue",
+    linewidth = 1
+  ) +
+  geom_point(
+    color = "red",
+    size = 2
+  ) +
+  scale_y_continuous(
+    labels = scales::label_dollar()
+  ) +
+  labs(
+    title = "Historical Annual Industry Incurred Losses",
+    subtitle = "Combined Insurance Data, 1988-2007",
+    x = "Accident Year",
+    y = "Incurred Losses ($ Millions)"
+  ) +
+  theme_gray()
+
+print(p1)
+
+ggsave(
+  file.path(plot_dir, "historical_losses_millions.png"),
+  plot = p1,
+  width = 10,
+  height = 6,
+  dpi = 300
+)
+
+
+# ============================================================
+# 11. VISUALIZE TRAINING AND TESTING DATA
+# ============================================================
+
+plot_data <- plot_data %>%
+  mutate(
+    Dataset = if_else(
+      AccidentYear <= 2003,
+      "Training Data",
+      "Testing Data"
+    )
+  )
+
+p2 <- ggplot(
+  plot_data,
+  aes(
+    x = AccidentYear,
+    y = IncurredLosses_Millions,
+    color = Dataset
+  )
+) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  scale_color_manual(
+    values = c(
+      "Training Data" = "blue",
+      "Testing Data" = "red"
+    )
+  ) +
+  scale_y_continuous(
+    labels = scales::label_dollar()
+  ) +
+  labs(
+    title = "Training and Testing Data",
+    subtitle = "1988-2003 Training; 2004-2007 Testing",
+    x = "Accident Year",
+    y = "Incurred Losses ($ Millions)",
+    color = "Dataset"
+  ) +
+  theme_gray()
+
+print(p2)
+
+ggsave(
+  file.path(plot_dir, "training_testing_millions.png"),
+  plot = p2,
+  width = 10,
+  height = 6,
+  dpi = 300
+)
+
+
+# ============================================================
+# 12. FIT LINEAR AND QUADRATIC TSLM MODELS
+# ============================================================
+
+tslm_models <- train_data %>%
+  model(
+    Linear_TSLM = TSLM(
+      IncurredLosses ~ trend()
+    ),
+    
+    Quadratic_TSLM = TSLM(
+      IncurredLosses ~ trend() + I(trend()^2)
+    )
+  )
+
+cat("\n========== TSLM MODELS ==========\n")
+
+report(tslm_models)
+
+
+# ============================================================
+# 13. MODEL SUMMARIES
+# ============================================================
+
+linear_model_only <- train_data %>%
+  model(
+    Linear_TSLM = TSLM(
+      IncurredLosses ~ trend()
+    )
+  )
+
+quadratic_model_only <- train_data %>%
+  model(
+    Quadratic_TSLM = TSLM(
+      IncurredLosses ~ trend() + I(trend()^2)
+    )
+  )
+
+cat("\n========== LINEAR MODEL ==========\n")
+
+report(linear_model_only)
+
+cat("\n========== QUADRATIC MODEL ==========\n")
+
+report(quadratic_model_only)
+
+
+# ============================================================
+# 14. GENERATE TSLM FORECASTS
+# ============================================================
+
+forecasts <- tslm_models %>%
+  forecast(
+    new_data = test_data
+  )
+
+cat("\n========== FORECAST RESULTS ==========\n")
+
+print(forecasts)
+
+
+# ============================================================
+# 15. FORECAST ACCURACY
+# ============================================================
+
+accuracy_results <- forecasts %>%
+  accuracy(test_data)
+
+cat("\n========== FORECAST ACCURACY ==========\n")
+
+print(accuracy_results)
+
+write_csv(
+  accuracy_results,
+  file.path(output_dir, "tslm_accuracy.csv")
+)
+
+
+# ============================================================
+# 16. COMPARE MAE, RMSE, AND MAPE
+# ============================================================
+
+model_comparison <- accuracy_results %>%
+  select(
+    .model,
+    MAE,
+    RMSE,
+    MAPE
+  ) %>%
+  arrange(RMSE)
+
+cat("\n========== MODEL COMPARISON ==========\n")
+
+print(model_comparison)
+
+write_csv(
+  model_comparison,
+  file.path(output_dir, "tslm_model_comparison.csv")
+)
+
+
+# ============================================================
+# 17. SELECT BEST MODEL BASED ON RMSE
+# ============================================================
+
+best_model <- model_comparison %>%
+  slice_min(
+    order_by = RMSE,
+    n = 1,
+    with_ties = TRUE
+  )
+
+cat("\n========== BEST TSLM MODEL ==========\n")
+
+print(best_model)
+
+write_csv(
+  best_model,
+  file.path(output_dir, "best_tslm_model.csv")
+)
+
+
+# ============================================================
+# 18. PREPARE FORECAST VALUES IN MILLIONS
+# ============================================================
+
+forecast_plot_data <- forecasts %>%
+  as_tibble() %>%
+  mutate(
+    Forecast_Millions = .mean / 1000000
+  )
+
+actual_plot_data <- ts_data %>%
+  as_tibble() %>%
+  mutate(
+    Actual_Millions = IncurredLosses / 1000000
+  )
+
+write_csv(
+  forecasts %>% as_tibble(),
+  file.path(output_dir, "forecasts.csv")
+)
+
+
+# ============================================================
+# 19. ACTUAL VS FORECAST VISUALIZATION
+# ============================================================
+
+p3 <- ggplot() +
+  
+  geom_line(
+    data = actual_plot_data,
+    aes(
+      x = AccidentYear,
+      y = Actual_Millions,
+      color = "Actual"
+    ),
+    linewidth = 1
+  ) +
+  
+  geom_point(
+    data = actual_plot_data,
+    aes(
+      x = AccidentYear,
+      y = Actual_Millions
+    ),
+    color = "black",
+    size = 2
+  ) +
+  
+  geom_line(
+    data = forecast_plot_data,
+    aes(
+      x = AccidentYear,
+      y = Forecast_Millions,
+      color = .model,
+      group = .model
+    ),
+    linewidth = 1
+  ) +
+  
+  geom_point(
+    data = forecast_plot_data,
+    aes(
+      x = AccidentYear,
+      y = Forecast_Millions,
+      color = .model
+    ),
+    size = 2
+  ) +
+  
+  scale_color_manual(
+    values = c(
+      "Actual" = "black",
+      "Linear_TSLM" = "blue",
+      "Quadratic_TSLM" = "red"
+    )
+  ) +
+  
+  scale_y_continuous(
+    labels = scales::label_dollar()
+  ) +
+  
+  labs(
+    title = "Actual vs Forecast Incurred Losses",
+    subtitle = "Linear and Quadratic TSLM Models",
+    x = "Accident Year",
+    y = "Incurred Losses ($ Millions)",
+    color = "Model"
+  ) +
+  
+  theme_gray()
+
+print(p3)
+
+ggsave(
+  file.path(plot_dir, "forecast_comparison_millions.png"),
+  plot = p3,
+  width = 10,
+  height = 6,
+  dpi = 300
+)
+
+
+# ============================================================
+# 20. RESIDUAL DIAGNOSTICS
+# ============================================================
+
+# Residual diagnostics are fitted separately
+# to avoid the multiple-model gg_tsresiduals() error.
+
+# ------------------------------------------------------------
+# LINEAR TSLM RESIDUALS
+# ------------------------------------------------------------
+
+linear_residuals <- augment(
+  linear_model_only
+) %>%
+  as_tibble()
+
+residual_plot_linear <- ggplot(
+  linear_residuals,
+  aes(
+    x = AccidentYear,
+    y = .resid / 1000000
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    color = "red",
+    linetype = "dashed"
+  ) +
+  geom_line(
+    color = "steelblue",
+    linewidth = 1
+  ) +
+  geom_point(
+    color = "steelblue",
+    size = 2
+  ) +
+  labs(
+    title = "Linear TSLM Residual Diagnostics",
+    x = "Accident Year",
+    y = "Residuals ($ Millions)"
+  ) +
+  theme_gray()
+
+print(residual_plot_linear)
+
+ggsave(
+  file.path(plot_dir, "Linear_TSLM_Residuals.png"),
+  plot = residual_plot_linear,
+  width = 10,
+  height = 6,
+  dpi = 300
+)
+
+
+# ------------------------------------------------------------
+# QUADRATIC TSLM RESIDUALS
+# ------------------------------------------------------------
+
+quadratic_residuals <- augment(
+  quadratic_model_only
+) %>%
+  as_tibble()
+
+residual_plot_quadratic <- ggplot(
+  quadratic_residuals,
+  aes(
+    x = AccidentYear,
+    y = .resid / 1000000
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    color = "red",
+    linetype = "dashed"
+  ) +
+  geom_line(
+    color = "darkgreen",
+    linewidth = 1
+  ) +
+  geom_point(
+    color = "darkgreen",
+    size = 2
+  ) +
+  labs(
+    title = "Quadratic TSLM Residual Diagnostics",
+    x = "Accident Year",
+    y = "Residuals ($ Millions)"
+  ) +
+  theme_gray()
+
+print(residual_plot_quadratic)
+
+ggsave(
+  file.path(plot_dir, "Quadratic_TSLM_Residuals.png"),
+  plot = residual_plot_quadratic,
+  width = 10,
+  height = 6,
+  dpi = 300
+)
+
+
+# ============================================================
+# 21. RMSE MODEL COMPARISON PLOT
+# ============================================================
+
+p4 <- ggplot(
+  model_comparison,
+  aes(
+    x = .model,
+    y = RMSE,
+    fill = .model
+  )
+) +
+  geom_col() +
+  labs(
+    title = "RMSE Comparison: Linear vs Quadratic TSLM",
+    x = "Forecasting Model",
+    y = "RMSE (Dollars)",
+    fill = "Model"
+  ) +
+  theme_gray()
+
+print(p4)
+
+ggsave(
+  file.path(plot_dir, "rmse_model_comparison.png"),
+  plot = p4,
+  width = 9,
+  height = 6,
+  dpi = 300
+)
+
+
+# ============================================================
+# 22. FINAL PROJECT SUMMARY
+# ============================================================
+
+cat("\n")
+cat("====================================================\n")
+cat("ADS 506 FINAL PROJECT - TSLM ANALYSIS COMPLETED\n")
+cat("====================================================\n")
+
+cat("\nDataset: Combined insurance data (1988-2007)")
+
+cat("\nTraining period: 1988-2003")
+
+cat("\nTesting period: 2004-2007")
+
+cat("\nTotal annual observations:", nrow(ts_data))
+
+cat("\nTraining observations:", nrow(train_data))
+
+cat("\nTesting observations:", nrow(test_data))
+
+cat("\n\nMODEL ACCURACY COMPARISON:\n")
+
+print(model_comparison)
+
+cat("\nBEST MODEL BASED ON RMSE:\n")
+
+print(best_model)
+
+cat("\nOUTPUT DIRECTORY:", output_dir)
+
+cat("\nPLOT DIRECTORY:", plot_dir)
+
+cat("\n====================================================\n")
+cat("END OF TSLM ANALYSIS\n")
+cat("====================================================\n")
+
