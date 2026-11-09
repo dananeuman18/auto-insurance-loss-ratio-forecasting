@@ -40,7 +40,7 @@ library(scales)
 # Run from the repository root.
 # If necessary, change this path to your local project folder.
 
-project_dir <- "C:/Users/newer/OneDrive/Desktop/ADS 506/Final Assignment"
+
 
 setwd(project_dir)
 
