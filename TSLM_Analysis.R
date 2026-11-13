@@ -32,6 +32,15 @@ library(tidyverse)
 library(fpp3)
 library(scales)
 
+# Create Desktop folder for final plots
+
+desktop_plot_dir <- "C:/Users/newer/OneDrive/Desktop/ADS506_Plots"
+
+dir.create(
+  desktop_plot_dir,
+  showWarnings = FALSE,
+  recursive = TRUE
+)
 
 # ============================================================
 # 2. PROJECT WORKING DIRECTORY
@@ -42,7 +51,7 @@ library(scales)
 
 
 
-setwd(project_dir)
+
 
 # Define output folders
 
@@ -99,6 +108,7 @@ print(dim(file2))
 print(names(file2))
 
 
+
 # ============================================================
 # 4. STANDARDIZE INCURRED LOSSES
 # ============================================================
@@ -107,6 +117,8 @@ required_file1 <- c(
   "GRCODE",
   "GRNAME",
   "AccidentYear",
+  "DevelopmentYear",
+  "DevelopmentLag",
   "IncurLoss_B"
 )
 
@@ -114,6 +126,8 @@ required_file2 <- c(
   "GRCODE",
   "GRNAME",
   "AccidentYear",
+  "DevelopmentYear",
+  "DevelopmentLag",
   "IncurredLosses"
 )
 
@@ -130,6 +144,8 @@ file1_clean <- file1 %>%
     GRCODE,
     GRNAME,
     AccidentYear,
+    DevelopmentYear,
+    DevelopmentLag,
     IncurredLosses = IncurLoss_B
   )
 
@@ -138,9 +154,10 @@ file2_clean <- file2 %>%
     GRCODE,
     GRNAME,
     AccidentYear,
+    DevelopmentYear,
+    DevelopmentLag,
     IncurredLosses
   )
-
 
 # ============================================================
 # 5. COMBINE DATASETS: 1988-2007
@@ -185,7 +202,14 @@ print(sum(duplicated(combined_data)))
 # 7. AGGREGATE ANNUAL INDUSTRY INCURRED LOSSES
 # ============================================================
 
-annual_industry_losses <- combined_data %>%
+latest_company_losses <- combined_data %>%
+  group_by(GRCODE, AccidentYear) %>%
+  filter(
+    DevelopmentYear == max(DevelopmentYear)
+  ) %>%
+  ungroup()
+
+annual_industry_losses <- latest_company_losses %>%
   group_by(AccidentYear) %>%
   summarise(
     IncurredLosses = sum(
@@ -196,15 +220,10 @@ annual_industry_losses <- combined_data %>%
   ) %>%
   arrange(AccidentYear)
 
-cat("\n========== ANNUAL INDUSTRY LOSSES ==========\n")
-
-print(annual_industry_losses)
-
 write_csv(
   annual_industry_losses,
   file.path(output_dir, "annual_industry_losses.csv")
 )
-
 
 # ============================================================
 # 8. CONVERT DATA INTO A TSIBBLE
@@ -257,17 +276,17 @@ print(range(test_data$AccidentYear))
 print(nrow(test_data))
 
 
+
 # ============================================================
 # 10. HISTORICAL INDUSTRY INCURRED LOSSES
 # ============================================================
 
-# Convert to millions for visualization only.
+# Convert incurred losses to millions for visualization.
 # Original IncurredLosses remains unchanged.
 
 plot_data <- ts_data %>%
   mutate(
-    IncurredLosses_Millions =
-      IncurredLosses / 1000000
+    IncurredLosses_Millions = IncurredLosses / 1000000
   )
 
 p1 <- ggplot(
@@ -286,7 +305,10 @@ p1 <- ggplot(
     size = 2
   ) +
   scale_y_continuous(
-    labels = scales::label_dollar()
+    labels = scales::label_dollar(
+      prefix = "$",
+      suffix = "M"
+    )
   ) +
   labs(
     title = "Historical Annual Industry Incurred Losses",
@@ -305,6 +327,7 @@ ggsave(
   height = 6,
   dpi = 300
 )
+
 
 
 # ============================================================
@@ -337,7 +360,10 @@ p2 <- ggplot(
     )
   ) +
   scale_y_continuous(
-    labels = scales::label_dollar()
+    labels = scales::label_dollar(
+      prefix = "$",
+      suffix = "M"
+    )
   ) +
   labs(
     title = "Training and Testing Data",
@@ -357,6 +383,7 @@ ggsave(
   height = 6,
   dpi = 300
 )
+
 
 
 # ============================================================
@@ -503,12 +530,15 @@ write_csv(
 )
 
 
+
+
 # ============================================================
 # 19. ACTUAL VS FORECAST VISUALIZATION
 # ============================================================
 
 p3 <- ggplot() +
-  
+
+  # Actual incurred losses
   geom_line(
     data = actual_plot_data,
     aes(
@@ -518,7 +548,7 @@ p3 <- ggplot() +
     ),
     linewidth = 1
   ) +
-  
+
   geom_point(
     data = actual_plot_data,
     aes(
@@ -528,7 +558,8 @@ p3 <- ggplot() +
     color = "black",
     size = 2
   ) +
-  
+
+  # Forecast values
   geom_line(
     data = forecast_plot_data,
     aes(
@@ -539,7 +570,7 @@ p3 <- ggplot() +
     ),
     linewidth = 1
   ) +
-  
+
   geom_point(
     data = forecast_plot_data,
     aes(
@@ -549,31 +580,43 @@ p3 <- ggplot() +
     ),
     size = 2
   ) +
-  
+
+  # Model colors
   scale_color_manual(
     values = c(
       "Actual" = "black",
       "Linear_TSLM" = "blue",
       "Quadratic_TSLM" = "red"
+    ),
+    labels = c(
+      "Actual" = "Actual Losses",
+      "Linear_TSLM" = "Linear TSLM",
+      "Quadratic_TSLM" = "Quadratic TSLM"
     )
   ) +
-  
+
+  # Display values in millions
   scale_y_continuous(
-    labels = scales::label_dollar()
+    labels = scales::label_dollar(
+      prefix = "$",
+      suffix = "M"
+    )
   ) +
-  
+
   labs(
     title = "Actual vs Forecast Incurred Losses",
-    subtitle = "Linear and Quadratic TSLM Models",
+    subtitle = "Linear and Quadratic TSLM Models (2004-2007)",
     x = "Accident Year",
     y = "Incurred Losses ($ Millions)",
     color = "Model"
   ) +
-  
+
   theme_gray()
 
+# Display visualization
 print(p3)
 
+# Save visualization
 ggsave(
   file.path(plot_dir, "forecast_comparison_millions.png"),
   plot = p3,
@@ -683,41 +726,113 @@ ggsave(
   dpi = 300
 )
 
+# Check original losses
+summary(train_data$IncurredLosses)
+
+# Check transformed losses
+summary(transformed_data$TransformedLosses)
+
+# Count zero values
+sum(transformed_data$TransformedLosses == 0, na.rm = TRUE)
+
+# Check missing values
+sum(is.na(transformed_data$TransformedLosses))
+
+
 
 # ============================================================
-# 21. RMSE MODEL COMPARISON PLOT
+# BOX-COX TRANSFORMED SERIES
 # ============================================================
 
-p4 <- ggplot(
-  model_comparison,
+p4_boxcox <- ggplot(
+  transformed_data,
   aes(
-    x = .model,
-    y = RMSE,
-    fill = .model
+    x = AccidentYear,
+    y = TransformedLosses / 1000000000
   )
 ) +
-  geom_col() +
+  geom_line(
+    color = "blue",
+    linewidth = 1
+  ) +
+  geom_point(
+    color = "red",
+    size = 2
+  ) +
+  scale_y_continuous(
+    labels = scales::label_number(
+      accuracy = 0.1
+    )
+  ) +
   labs(
-    title = "RMSE Comparison: Linear vs Quadratic TSLM",
-    x = "Forecasting Model",
-    y = "RMSE (Dollars)",
-    fill = "Model"
+    title = "Box-Cox Transformed Annual Industry Losses",
+    subtitle = paste(
+      "Estimated Lambda =",
+      round(lambda, 4)
+    ),
+    x = "Accident Year",
+    y = "Transformed Losses (Billions, Box-Cox Scale)"
   ) +
   theme_gray()
 
-print(p4)
+print(p4_boxcox)
 
+# Save to project plot folder
 ggsave(
-  file.path(plot_dir, "rmse_model_comparison.png"),
-  plot = p4,
-  width = 9,
+  "boxcox_transformed_losses.png",
+  plot = p4_boxcox,
+  path = plot_dir,
+  width = 10,
   height = 6,
   dpi = 300
 )
 
+# Save to Desktop
+ggsave(
+  "boxcox_transformed_losses.png",
+  plot = p4_boxcox,
+  path = desktop_plot_dir,
+  width = 10,
+  height = 6,
+  dpi = 300
+)
 
 # ============================================================
-# 22. FINAL PROJECT SUMMARY
+# 22. TRANSFORMED QUADRATIC TSLM
+# ============================================================
+
+# Convert transformed training data into a tsibble
+
+transformed_ts <- transformed_data %>%
+  select(AccidentYear, TransformedLosses) %>%
+  as_tsibble(index = AccidentYear)
+
+# Fit quadratic TSLM to transformed data
+
+transformed_model <- transformed_ts %>%
+  model(
+    Quadratic_BoxCox = TSLM(
+      TransformedLosses ~ trend() + I(trend()^2)
+    )
+  )
+
+# Display model parameters
+
+cat("\n========== BOX-COX QUADRATIC TSLM ==========\n")
+
+report(transformed_model)
+
+# Generate forecasts for the testing period
+
+transformed_forecast <- transformed_model %>%
+  forecast(
+    new_data = test_data
+  )
+
+print(transformed_forecast)
+
+# ============================================================
+# 23. FINAL PROJECT SUMMARY
 # ============================================================
 
 cat("\n")
@@ -752,4 +867,275 @@ cat("\nPLOT DIRECTORY:", plot_dir)
 cat("\n====================================================\n")
 cat("END OF TSLM ANALYSIS\n")
 cat("====================================================\n")
+
+
+# ============================================================
+# 24. BACK-TRANSFORM FORECASTS
+# ============================================================
+
+transformed_predictions <- transformed_forecast %>%
+  mutate(
+    Forecast_Original = inv_box_cox(
+      .mean,
+      lambda
+    )
+  )
+
+actual_test <- test_data %>%
+  as_tibble()
+
+comparison_transformed <- transformed_predictions %>%
+  as_tibble() %>%
+  select(
+    AccidentYear,
+    Forecast_Original
+  ) %>%
+  left_join(
+    actual_test,
+    by = "AccidentYear"
+  ) %>%
+  mutate(
+    Error = IncurredLosses - Forecast_Original,
+    Absolute_Error = abs(Error),
+    Squared_Error = Error^2,
+    Percentage_Error =
+      abs(Error / IncurredLosses) * 100
+  )
+
+transformed_accuracy <- comparison_transformed %>%
+  summarise(
+    MAE = mean(Absolute_Error),
+    RMSE = sqrt(mean(Squared_Error)),
+    MAPE = mean(Percentage_Error)
+  )
+
+
+# ============================================================
+# 25. TRANSFORMED MODEL FORECAST VISUALIZATION
+# ============================================================
+
+fitted_values <- transformed_model %>%
+  augment() %>%
+  mutate(
+    Fitted_Original = inv_box_cox(
+      .fitted,
+      lambda
+    )
+  )
+
+p5 <- ggplot() +
+
+  geom_line(
+    data = train_data %>% as_tibble(),
+    aes(
+      x = AccidentYear,
+      y = IncurredLosses,
+      color = "Training Data"
+    ),
+    linewidth = 1
+  ) +
+
+  geom_line(
+    data = fitted_values,
+    aes(
+      x = AccidentYear,
+      y = Fitted_Original,
+      color = "Fitted Values"
+    ),
+    linewidth = 1
+  ) +
+
+  geom_line(
+    data = comparison_transformed,
+    aes(
+      x = AccidentYear,
+      y = Forecast_Original,
+      color = "Box-Cox Forecast"
+    ),
+    linewidth = 1
+  ) +
+
+  geom_point(
+    data = comparison_transformed,
+    aes(
+      x = AccidentYear,
+      y = IncurredLosses,
+      color = "Actual Test Data"
+    ),
+    size = 2
+  ) +
+
+  scale_color_manual(
+    values = c(
+      "Training Data" = "black",
+      "Fitted Values" = "blue",
+      "Box-Cox Forecast" = "red",
+      "Actual Test Data" = "darkgreen"
+    )
+  ) +
+
+  scale_y_continuous(
+    labels = scales::label_dollar()
+  ) +
+
+  labs(
+    title = "Box-Cox Quadratic TSLM Forecast",
+    subtitle = "Actual, fitted, and forecast incurred losses",
+    x = "Accident Year",
+    y = "Incurred Losses ($)",
+    color = "Series"
+  ) +
+
+  theme_gray()
+
+print(p5)
+
+ggsave(
+  file.path(
+    plot_dir,
+    "boxcox_forecast_comparison.png"
+  ),
+  plot = p5,
+  width = 10,
+  height = 6,
+  dpi = 300
+)
+
+
+# ============================================================
+# 26. FINAL MODEL COMPARISON
+# ============================================================
+
+final_comparison <- bind_rows(
+
+  model_comparison %>%
+    filter(.model == "Quadratic_TSLM") %>%
+    transmute(
+      Model = "Original Quadratic TSLM",
+      MAE,
+      RMSE,
+      MAPE
+    ),
+
+  transformed_accuracy %>%
+    mutate(
+      Model = "Box-Cox Quadratic TSLM"
+    ) %>%
+    select(
+      Model,
+      MAE,
+      RMSE,
+      MAPE
+    )
+
+) %>%
+  arrange(RMSE)
+
+print(final_comparison)
+
+write_csv(
+  final_comparison,
+  file.path(
+    output_dir,
+    "original_vs_boxcox_comparison.csv"
+  )
+
+)
+cat("\n========== BOX-COX TRANSFORMATION RESULTS ==========\n")
+
+cat("\nEstimated Lambda:", round(lambda, 4))
+
+cat("\n\nTransformed Model Accuracy:\n")
+
+print(transformed_accuracy)
+
+cat("\n\nFinal Model Comparison:\n")
+
+print(final_comparison)
+
+# ============================================================
+# 26. ORIGINAL VS. BOX-COX MODEL ACCURACY
+# ============================================================
+
+accuracy_plot_data <- final_comparison %>%
+  tidyr::pivot_longer(
+    cols = c(MAE, RMSE, MAPE),
+    names_to = "Measure",
+    values_to = "Accuracy"
+  ) %>%
+  mutate(
+    Accuracy = if_else(
+      Measure %in% c("MAE", "RMSE"),
+      Accuracy / 1000000,
+      Accuracy
+    )
+  )
+
+p6 <- ggplot(
+  accuracy_plot_data,
+  aes(
+    x = Model,
+    y = Accuracy,
+    fill = Model
+  )
+) +
+  geom_col(position = "dodge") +
+  facet_wrap(
+    ~ Measure,
+    scales = "free_y"
+  ) +
+  labs(
+    title = "Original vs. Box-Cox TSLM Accuracy",
+    subtitle = "Comparison of MAE, RMSE, and MAPE",
+    x = "Model",
+    y = "Error Measure (Dollars in Millions or Percentage)",
+    fill = "Model"
+  ) +
+  theme_gray() +
+  theme(
+    axis.text.x = element_text(
+      angle = 15,
+      hjust = 1
+    )
+  )
+
+print(p6)
+
+ggsave(
+  file.path(
+    desktop_plot_dir,
+    "06_original_vs_boxcox_accuracy.png"
+  ),
+  plot = p6,
+  width = 10,
+  height = 6,
+  dpi = 300
+)
+# Display the latest plot
+print(p4_boxcox)
+
+# Save/overwrite the existing file
+ggsave(
+  filename = "boxcox_transformed_losses.png",
+  plot = p4_boxcox,
+  path = plot_dir,
+  width = 10,
+  height = 6,
+  dpi = 300
+)
+ggsave(
+  filename = "boxcox_transformed_losses.png",
+  plot = p4_boxcox,
+  path = desktop_plot_dir,
+  width = 10,
+  height = 6,
+  dpi = 300
+)
+file.exists(
+  file.path(plot_dir, "boxcox_transformed_losses.png")
+)
+
+file.exists(
+  file.path(desktop_plot_dir, "boxcox_transformed_losses.png")
+)
 
