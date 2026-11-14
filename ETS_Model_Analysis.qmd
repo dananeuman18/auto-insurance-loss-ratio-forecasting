@@ -1,0 +1,333 @@
+---
+title: "ETS_Models_Auto_Insurance_Loss"
+bibliography: references.bib
+bibliographystyle: apa
+author: "Samuel Scott"
+format:
+    html:
+        toc: true
+editor: visual
+---
+
+#Auto Insurance Loss Data: ETS Model Analysis
+
+```{r}
+library(tidyverse)
+library(fpp3)
+library(slider) #for rolling window functions
+library(gt)
+library(dplyr)
+```
+
+###1.Reading and combining auto loss insurance data years
+
+```{r}
+auto_2011 <- read.csv('Data/ppauto_pos_Sep_2011.csv')
+auto_2025 <- read.csv('Data/ppauto_pos98-07_Dec_2025.csv')
+# colnames(auto_2011)
+# colnames(auto_2025)
+
+match_column_names <- function(d) {
+  d |>
+    select(
+      GRCODE, GRNAME, AccidentYear, DevelopmentYear, DevelopmentLag,
+      IncurLoss       = starts_with("Incur"),
+      CumPaidLoss     = starts_with("CumPaidLoss"),
+      BulkLoss        = starts_with("BulkLoss"),
+      EarnedPremDIR   = starts_with("EarnedPremDIR"),
+      EarnedPremCeded = starts_with("EarnedPremCeded"),
+      EarnedPremNet   = starts_with("EarnedPremNet")
+    )
+}
+
+auto_2011_clean <- match_column_names(auto_2011)
+auto_2025_clean <- match_column_names(auto_2025)
+
+combined_data <- bind_rows(auto_2011_clean, auto_2025_clean)
+combined_data <- combined_data |>
+  as_tibble()
+```
+
+###2.Filtering and creating Loss_Ratio
+
+```{r}
+annual_industry_losses <- combined_data |>
+  group_by(AccidentYear) |>
+  summarise(
+    IncurLoss = sum(
+      IncurLoss,
+      na.rm = TRUE
+    ),
+    .groups = "drop"
+  ) |>
+  arrange(AccidentYear)
+
+annual_industry_losses
+
+# loss_ratio <- combined_data |>
+#   #no division by zero for EarnedPremNet
+#   filter(DevelopmentLag == 10, EarnedPremNet > 0) |>
+#   group_by(AccidentYear) |>
+#   summarise(
+#     Losses  = sum(IncurLoss),
+#     Premium = sum(EarnedPremNet)
+#   ) |>
+#   mutate(LossRatio = Losses / Premium) |>
+#   as_tsibble(index = AccidentYear)
+# 
+#   autoplot(loss_ratio, LossRatio)
+```
+
+```{r}
+ts_data <- annual_industry_losses |>
+  mutate(
+    IncurLoss =
+      IncurLoss / 1000000
+  ) |> 
+  as_tsibble(index = AccidentYear)
+
+
+p1 <- ggplot(
+  ts_data,
+  aes(
+    x = AccidentYear,
+    y = IncurLoss
+  )
+) +
+  geom_line(
+    color = "blue",
+    linewidth = 1
+  ) +
+  geom_point(
+    color = "red",
+    size = 2
+  ) +
+  scale_y_continuous(
+    labels = scales::label_dollar(
+      prefix = "$",
+      suffix = "M"
+    )
+  ) +
+  labs(
+    title = "Historical Annual Industry Incurred Losses",
+    subtitle = "Combined Insurance Data, 1988-2007",
+    x = "Accident Year",
+    y = "Incurred Losses ($ Millions)"
+  ) +
+  theme_gray()
+
+p1
+```
+
+###3.Train/test split and model selection
+
+```{r}
+#train on first 16 years of data (80%)
+train <- ts_data |>
+  filter(AccidentYear < 2004)
+test  <- ts_data |> 
+  filter(AccidentYear >= 2004)
+
+#find optimal lambda value using guerrero for box cox damped model
+lambda <- train |>
+  features(IncurLoss, features = guerrero) |>
+  pull(lambda_guerrero)
+
+print(lambda)
+
+incurred_loss_fit <- train |>
+  model(
+    baseline = RW(IncurLoss ~ drift()),
+    damped   = ETS(IncurLoss ~ error("A") + trend("Ad") + season("N")),
+    auto_ets = ETS(IncurLoss),
+    ets_dmp_bc   = ETS(box_cox(IncurLoss, lambda) ~ error("A") + trend("Ad") + season("N"))
+  )
+#what model did auto choose?
+incurred_loss_fit |> 
+  select(auto_ets) |>
+  report()
+```
+
+The Auto ETS model selected a multiplicative error model with additive trend, with no seasonality. The alpha parameter is very close to 1 meaning that the model will weigh the most recent time value in the training data therefore having the most influence on the data. The beta parameter being very low means that means the slope or trend of the time series updates very slowly and a value closer to 1 would update more rapidly.
+
+###4. Transformed Box Cox Damped Model Comparison
+
+```{r}
+train |>
+  mutate(Transformed = box_cox(IncurLoss, lambda)) |>
+  as_tibble() |>
+  select(AccidentYear, Original = IncurLoss, Transformed) |>
+  pivot_longer(-AccidentYear, names_to = "series", values_to = "value") |>
+  mutate(series = recode(series,
+    Original    = "Original (millions of $)",
+    Transformed = paste0("Box-Cox transformed (λ = ", round(lambda, 2), ")"))) |>
+  ggplot(aes(AccidentYear, value)) +
+  geom_line() +
+  geom_point() +
+  facet_wrap(~ series, ncol = 1, scales = "free_y") +
+  labs(title = "Incurred losses before and after Box-Cox transformation (training data)",
+       x = "Accident year", y = NULL) +
+  theme_minimal(base_size = 13)
+```
+
+###5.Examining training model metrics and residuals
+
+```{r}
+incurred_loss_fit |> 
+  select(baseline) |>
+  report()
+```
+
+The baseline model I decided to choose was a random walk method with drift. It forecasts the last observation and adds the average year-to-year change over the training data. Naive and drift methods are commonly used as simple benchmarks against which more sophisticated forecasting models are compared (Hyndman & Athanasopoulos, 2021). A sigma\^2 value of 34.6481
+
+```{r}
+incurred_loss_fit |> 
+  select(damped) |>
+  report()
+```
+
+The damped model has a high alpha and similarly to the auto_ets weighs the most recent value more than the others having more influence on the model's learning. The damped model has a even smaller beta compared to auto_ets so trend moves extremely slow. The phi parameter being so high means that there is little damping meaning that it will pick up on a trend that is almost constant.
+
+```{r}
+incurred_loss_fit |> 
+  select(ets_dmp_bc) |>
+  report()
+```
+
+The box cox damped model has very similar smoothing parameters as the damped model in terms of how it affects the model.
+
+```{r}
+#training metrics
+train_acc <- accuracy(incurred_loss_fit) |>
+  arrange(RMSE) |>
+  select(.model, ME, RMSE, MAE, MAPE)
+
+knitr::kable(train_acc, digits=2,  col.names = 
+             c("Model", "ME", "RMSE", "MAE", "MAPE"),
+             caption = "Training accuracy on all models",
+             align = "c")
+```
+
+The model with the lowest Root Mean Squared Error (RMSE) is the damped model not transformed as it slightly performed better than all the other models at learning the time series data. The baseline Random Walk model with drift had the highest RMSE score making it not as robust as the ETS models in terms of learning the training data.
+
+```{r}
+#| warning: false
+
+incurred_loss_fit |>
+  select(baseline) |>
+  gg_tsresiduals() + 
+  labs(title = "Baseline model residuals")
+
+incurred_loss_fit |>
+  select(auto_ets) |>
+  gg_tsresiduals() +
+  labs(title = "Auto ETS model residuals")
+
+incurred_loss_fit |>
+  select(damped) |>
+  gg_tsresiduals() + 
+  labs(title = "Damped model residuals")
+
+incurred_loss_fit |>
+  select(ets_dmp_bc) |>
+  gg_tsresiduals() +
+  labs(title = "Box Cox Damped ETS model residuals")
+
+
+augment(incurred_loss_fit) |>
+  features(.innov, ljung_box, lag = 5)
+#low p-value means the models do not capture all aspects of the data
+```
+
+Ljung-Box tests (lag 5) gave p-values above 0.05 for all models (auto ETS 0.667, baseline 0.423, damped 0.263, Box-Cox damped 0.171), so none showed significant residual autocorrelation and we fail to reject the null of white noise. Auto ETS had the highest p-value, suggesting the least leftover structure, although the differences are small and the test has limited power with only 16 observations. The ACF plots showed no lags outside the 95% bounds for any model, and the residual histograms were roughly symmetric. Because the Box-Cox model’s residuals are on the transformed scale, they are not directly comparable to the others, so that model is compared on forecast accuracy in original units.
+
+###6.Forecasting models
+
+```{r}
+fc_baseline <- incurred_loss_fit |>
+  forecast(new_data = test) |>
+  filter(.model == "baseline")
+
+autoplot(fc_baseline, ts_data) +
+  labs(title = "Baseline model - Forecasts vs actual loss ratio", y = "Incur Loss (Millions)")
+```
+
+```{r}
+fc_auto <- incurred_loss_fit |>
+  forecast(new_data = test) |>
+  filter(.model == "auto_ets")
+
+autoplot(fc_auto, ts_data) +
+  labs(title = "Auto ETS - Forecasts vs actual loss ratio", y = "Incur Loss (Millions)")
+```
+
+```{r}
+fc_damped <- incurred_loss_fit |>
+  forecast(new_data=test) |>
+  filter(.model == "damped")
+
+autoplot(fc_damped, ts_data) +
+  labs(title = "Damped model - Forecasts vs actual loss ratio", y = "Incur Loss (Millions)")
+```
+
+```{r}
+fc_bc_damped <- incurred_loss_fit |>
+  forecast(new_data=test) |>
+  filter(.model == "ets_dmp_bc")
+
+autoplot(fc_damped, ts_data) +
+  labs(title = "Box Cox Damped model - Forecasts vs actual loss ratio", y = "Incur Loss (Millions)")
+```
+
+```{r}
+fc <- incurred_loss_fit |>
+  forecast(new_data = test)
+
+test_acc <- accuracy(fc, ts_data) |>
+  arrange(RMSE) |>
+  select(.model, RMSE, MAE, MAPE, MASE)
+
+knitr::kable(test_acc, digits=2,  col.names = 
+             c("Model", "RMSE", "MAE", "MAPE", "MASE"),
+             caption = "Testing accuracy on all models",
+             align = "c")
+```
+
+The ets_damp_box cox model had the lowest RMSE on the testing data by a significant margin making it useful to decide to perform data transformations for this insurance loss especially a log based box cox transformation which reduces the model variance.
+
+###7. Cross Validation and the decision to not transform the model.
+
+```{r}
+#| warning: false
+incur_loss_stretch <- ts_data |>
+  stretch_tsibble(.init = 10, .step = 1)
+
+fc_cv <- incur_loss_stretch |>
+  model(
+    baseline = RW(IncurLoss ~ drift()),
+    damped   = ETS(IncurLoss ~ error("A") + trend("Ad") + season("N")),
+    auto_ets = ETS(IncurLoss),
+    ets_dmp_bc   = ETS(box_cox(IncurLoss, lambda) ~ error("A") + trend("Ad") + season("N"))
+  ) |>
+  forecast(h = 10) |>
+  group_by(.id, .model) |>
+  mutate(h = row_number()) |>
+  ungroup() |>
+  as_fable(response = "IncurLoss", distribution = IncurLoss)
+
+cv_acc <- accuracy(fc_cv, ts_data) |>
+  arrange(RMSE) |>
+  select(.model, RMSE, MAE, MAPE, MASE)
+knitr::kable(cv_acc, digits = 2, col.names = c("Model", "RMSE",
+              "MAE", "MAPE", "MASE"), align='c')
+
+cv_h <- accuracy(fc_cv, ts_data, by = c("h", ".model"))
+
+ggplot(cv_h, aes(h, RMSE, colour = .model)) +
+  geom_line(linewidth = 1) +
+  geom_point() +
+  labs(title = "Cross-validated RMSE by forecast horizon",
+       x = "Years in the future", y = "RMSE (in millions of $US dollars)", colour = "Model")
+```
+
+With the cross_validation table the model that learns the data best is the box cox damped ets model. This demonstrates another example of proving the data transformations would benefit the business in reducing error rate and insurance loss.
